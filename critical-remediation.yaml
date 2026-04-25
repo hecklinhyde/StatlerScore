@@ -1,0 +1,420 @@
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/format-version-structure.html
+# 2010-09-09 is the only valid value
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Poor-Credit-Score Demo — intentionally misconfigured AWS resources designed
+  to demonstrate what a "Poor" Cloud Credit Score looks like. 555 score result = critical remedation required
+  WARNING:Never use in production.
+
+Parameters:
+  LatestAL2AMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Latest Amazon Linux 2 AMI
+
+Resources:
+  #VPC with no flow logs
+  BadVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: bad-credit-vpc
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref BadVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref BadVPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  IGW:
+    Type: AWS::EC2::InternetGateway
+
+  IGWAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref BadVPC
+      InternetGatewayId: !Ref IGW
+
+  PublicRT:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref BadVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttach
+    Properties:
+      RouteTableId: !Ref PublicRT
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+
+  RTAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRT
+
+  RTAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetB
+      RouteTableId: !Ref PublicRT
+
+  # Security groups with open ports
+
+  SGOpenSSH:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIpv6: ::/0
+
+  SGOpenRDP:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDP open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3389
+          ToPort: 3389
+          CidrIp: 0.0.0.0/0
+
+  SGOpenMySQL:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MySQL open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+
+  SGOpenPostgres:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+
+  SGOpenMSSQL:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MSSQL open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 1433
+          ToPort: 1433
+          CidrIp: 0.0.0.0/0
+
+  SGOpenMongo:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MongoDB open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 27017
+          ToPort: 27017
+          CidrIp: 0.0.0.0/0
+
+  SGOpenRedis:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Redis open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          CidrIp: 0.0.0.0/0
+
+  SGOpenElasticsearch:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Elasticsearch open to the world (bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 9200
+          ToPort: 9200
+          CidrIp: 0.0.0.0/0
+
+  SGOpenAllTCP:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: All TCP open to the world (very bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+
+  SGOpenAllV6:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: All TCP open to ::/0 (very bad)
+      VpcId: !Ref BadVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIpv6: ::/0
+
+  #EC2 instances old gen, same AZ, IMDSv1 allowed
+
+  BadInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAL2AMI
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds:
+        - !Ref SGOpenSSH
+        - !Ref SGOpenAllTCP
+      MetadataOptions:
+        HttpTokens: optional
+        HttpEndpoint: enabled
+      Tags:
+        - Key: Name
+          Value: bad-credit-instance-1
+
+  BadInstance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref LatestAL2AMI
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds:
+        - !Ref SGOpenRDP
+      MetadataOptions:
+        HttpTokens: optional
+        HttpEndpoint: enabled
+      Tags:
+        - Key: Name
+          Value: bad-credit-instance-2
+
+  #Unattached EBS volumes for configuration drift
+  UnattachedEBS1:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Size: 20
+      Encrypted: false
+      Tags:
+        - Key: Name
+          Value: unattached-ebs-1
+
+  UnattachedEBS2:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Size: 50
+      Encrypted: false
+      Tags:
+        - Key: Name
+          Value: unattached-ebs-2
+
+  UnattachedEBS3:
+    Type: AWS::EC2::Volume
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Size: 100
+      Encrypted: false
+      Tags:
+        - Key: Name
+          Value: unattached-ebs-3
+
+  #Unused Elastic IPs
+  UnusedEIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  UnusedEIP2:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  UnusedEIP3:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  UnusedEIP4:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  UnusedEIP5:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  #RDS bundled with bad practices
+  BadDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Bad DB subnet group (2 subnets)
+      SubnetIds:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+
+  BadRDS:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: '8.0'
+      MasterUsername: admin
+      MasterUserPassword: Badpassword1!
+      AllocatedStorage: '20'
+      DBSubnetGroupName: !Ref BadDBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref SGOpenMySQL
+      PubliclyAccessible: true
+      BackupRetentionPeriod: 0
+      MultiAZ: false
+      StorageEncrypted: false
+      DeletionProtection: false
+
+  #S3 bucket
+  BadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'bad-credit-demo-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: ObjectWriter
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  #IAM wildcard policies attached to a role
+
+  WildcardPolicy1:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: BadWildcardAdminPolicy1
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: '*'
+            Resource: '*'
+
+  WildcardPolicy2:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: BadWildcardAdminPolicy2
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: '*'
+            Resource: '*'
+
+  WildcardPolicy3:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: BadWildcardAdminPolicy3
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: '*'
+            Resource: '*'
+
+  WildcardPolicy4:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: BadWildcardAdminPolicy4
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: '*'
+            Resource: '*'
+
+  # Role makes all 4 policies count as "attached" (OnlyAttached=True filter)
+  BadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: BadCreditWildcardRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Ref WildcardPolicy1
+        - !Ref WildcardPolicy2
+        - !Ref WildcardPolicy3
+        - !Ref WildcardPolicy4
+
+  #IAM users
+  BadUser1:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: bad-credit-user-1
+
+  BadUser2:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: bad-credit-user-2
+
+  BadUser3:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: bad-credit-user-3
+
+Outputs:
+  VPCId:
+    Description: VPC with no flow logs
+    Value: !Ref BadVPC
+
+  BucketName:
+    Description: Publicly accessible S3 bucket
+    Value: !Ref BadBucket
+
+  RDSEndpoint:
+    Description: Publicly accessible RDS instance
+    Value: !GetAtt BadRDS.Endpoint.Address
+
+  ExpectedScore:
+    Description: Expected Cloud Credit Score range
+    Value: "Less than 580"

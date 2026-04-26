@@ -1,0 +1,1052 @@
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/format-version-structure.html
+# 2010-09-09 is the only valid value
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Resilient Statler Score demo.
+  Warning: Not for use in production. 
+
+Parameters:
+  LatestAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+
+Resources:
+
+  #VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+
+  IGW:
+    Type: AWS::EC2::InternetGateway
+
+  IGWAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttach
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+
+  RTAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTable
+
+  RTAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTable
+
+  #VPC Flow Logs
+  FlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/vpc/${AWS::StackName}-flow-logs'
+      RetentionInDays: 90
+
+  FlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: vpc-flow-logs.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FlowLogToCloudWatch
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: '*'
+
+  VPCFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref VPC
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref FlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
+
+  #Security groups
+  SGInstance:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Internal VPC traffic only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - {IpProtocol: -1, CidrIp: 10.0.0.0/16}
+
+  SGRDS:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: MySQL from instance SG only
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SGInstance
+
+  # EC2
+  Instance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t4g.micro
+      ImageId: !Ref LatestAMI
+      SubnetId: !Ref SubnetA
+      SecurityGroupIds: [!Ref SGInstance]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+
+  Instance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t4g.micro
+      ImageId: !Ref LatestAMI
+      SubnetId: !Ref SubnetB
+      SecurityGroupIds: [!Ref SGInstance]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+
+  #Auto Scaling Group
+  ASGLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: t4g.micro
+        ImageId: !Ref LatestAMI
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ASGLaunchTemplate
+        Version: !GetAtt ASGLaunchTemplate.LatestVersionNumber
+      MinSize: '0'
+      MaxSize: '2'
+      DesiredCapacity: '0'
+      VPCZoneIdentifier: [!Ref SubnetA, !Ref SubnetB]
+
+  #RDS
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Perfect score DB subnet group
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      DBInstanceClass: db.t3.small
+      Engine: mysql
+      EngineVersion: '8.0'
+      MasterUsername: admin
+      MasterUserPassword: PerfectScoreDemo2024!
+      AllocatedStorage: '20'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups: [!Ref SGRDS]
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      MultiAZ: true
+      StorageEncrypted: true
+      DeletionProtection: false
+
+  #S3
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerPreferred
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLogs
+            Status: Enabled
+            ExpirationInDays: 365
+
+  #S3
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: trail-bucket/
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveTrailLogs
+            Status: Enabled
+            Transitions:
+              - {TransitionInDays: 90, StorageClass: STANDARD_IA}
+            ExpirationInDays: 730
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  TrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt TrailBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt TrailBucket.Arn
+              - !Sub '${TrailBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  AppBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: app-bucket/
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionAndExpire
+            Status: Enabled
+            Transitions:
+              - {TransitionInDays: 90, StorageClass: STANDARD_IA}
+              - {TransitionInDays: 180, StorageClass: GLACIER}
+            ExpirationInDays: 365
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AppBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AppBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt AppBucket.Arn
+              - !Sub '${AppBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: config-bucket/
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: config.amazonaws.com}
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt ConfigBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Effect: Allow
+            Principal: {Service: config.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt ConfigBucket.Arn
+              - !Sub '${ConfigBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  #CloudFront
+  CFOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  CFDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub '${AWS::StackName}-distribution'
+        DefaultRootObject: index.html
+        Origins:
+          - Id: AppBucketOrigin
+            DomainName: !GetAtt AppBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CFOriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: AppBucketOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+
+  #CloudTrail
+  TrailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/cloudtrail/${AWS::StackName}-trail'
+      RetentionInDays: 90
+
+  TrailCWRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudTrailToCloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub '${TrailLogGroup.Arn}:*'
+
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: TrailBucketPolicy
+    Properties:
+      TrailName: !Sub '${AWS::StackName}-trail'
+      S3BucketName: !Ref TrailBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      EnableLogFileValidation: true
+      CloudWatchLogsLogGroupArn: !GetAtt TrailLogGroup.Arn
+      CloudWatchLogsRoleArn: !GetAtt TrailCWRole.Arn
+      IncludeGlobalServiceEvents: true
+
+  #AWS Backup
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: !Sub '${AWS::StackName}-vault'
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: !Sub '${AWS::StackName}-plan'
+        BackupPlanRule:
+          - RuleName: DailyBackup
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: 'cron(0 3 * * ? *)'
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle:
+              DeleteAfterDays: 35
+          - RuleName: MonthlyBackup
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: 'cron(0 5 1 * ? *)'
+            StartWindowMinutes: 120
+            CompletionWindowMinutes: 360
+            Lifecycle:
+              DeleteAfterDays: 365
+
+  # AWS Config
+  # TAKES A LONG TIME TO LOAD EXCLUDED FOR NOW JUST MANUALLY DONE IN THE ACCOUNT FOR THIS TIER
+  ConfigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: config.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ConfigRecorderPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ConfigReadAll
+                Effect: Allow
+                Action:
+                  - acm:Describe*
+                  - acm:List*
+                  - cloudformation:Describe*
+                  - cloudformation:List*
+                  - cloudtrail:Describe*
+                  - cloudtrail:Get*
+                  - cloudtrail:List*
+                  - cloudwatch:Describe*
+                  - cloudwatch:Get*
+                  - cloudwatch:List*
+                  - config:Describe*
+                  - config:Get*
+                  - config:List*
+                  - config:Put*
+                  - config:Select*
+                  - config:BatchGet*
+                  - ec2:Describe*
+                  - ec2:Get*
+                  - elasticloadbalancing:Describe*
+                  - guardduty:Get*
+                  - guardduty:List*
+                  - iam:GenerateCredentialReport
+                  - iam:Get*
+                  - iam:List*
+                  - lambda:Get*
+                  - lambda:List*
+                  - rds:Describe*
+                  - rds:List*
+                  - s3:GetBucket*
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetLifecycleConfiguration
+                  - s3:ListAllMyBuckets
+                  - securityhub:Describe*
+                  - securityhub:Get*
+                  - securityhub:List*
+                  - sns:Get*
+                  - sns:List*
+                  - sqs:Get*
+                  - sqs:List*
+                  - backup:List*
+                  - backup:Describe*
+                  - backup:Get*
+                Resource: '*'
+              - Sid: ConfigS3Delivery
+                Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+                Condition:
+                  StringEquals:
+                    s3:x-amz-acl: bucket-owner-full-control
+              - Sid: ConfigS3BucketAcl
+                Effect: Allow
+                Action: s3:GetBucketAcl
+                Resource: !GetAtt ConfigBucket.Arn
+
+  ConfigRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    DependsOn: ConfigBucketPolicy
+    Properties:
+      RoleARN: !GetAtt ConfigRole.Arn
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: true
+
+  ConfigDeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    DependsOn: ConfigRecorder
+    Properties:
+      S3BucketName: !Ref ConfigBucket
+      ConfigSnapshotDeliveryProperties:
+        DeliveryFrequency: Six_Hours
+
+  CfgRuleRootMFA:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: ROOT_ACCOUNT_MFA_ENABLED}
+
+  CfgRuleIAMPasswordPolicy:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: IAM_PASSWORD_POLICY}
+
+  CfgRuleIAMUserMFA:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: IAM_USER_MFA_ENABLED}
+
+  CfgRuleAccessKeysRotated:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: ACCESS_KEYS_ROTATED}
+      InputParameters:
+        maxAccessKeyAge: '360'
+
+  CfgRuleIMDSv2:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: EC2_IMDSV2_CHECK}
+
+  CfgRuleS3PublicRead:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_PUBLIC_READ_PROHIBITED}
+
+  CfgRuleS3PublicWrite:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_PUBLIC_WRITE_PROHIBITED}
+
+  CfgRuleS3Versioning:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_VERSIONING_ENABLED}
+
+  CfgRuleS3Logging:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_LOGGING_ENABLED}
+
+  CfgRuleRDSPublicAccess:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: RDS_INSTANCE_PUBLIC_ACCESS_CHECK}
+
+  CfgRuleRDSMultiAZ:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: RDS_MULTI_AZ_SUPPORT}
+
+  CfgRuleRDSEncrypted:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: RDS_STORAGE_ENCRYPTED}
+
+  CfgRuleCloudTrailEnabled:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: CLOUD_TRAIL_ENABLED}
+
+  CfgRuleCloudTrailLogValidation:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: CLOUD_TRAIL_LOG_FILE_VALIDATION_ENABLED}
+
+  CfgRuleEncryptedVolumes:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: ENCRYPTED_VOLUMES}
+
+  CfgRuleVPCFlowLogs:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: VPC_FLOW_LOGS_ENABLED}
+
+  CfgRuleEBSSnapshotPublic:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: EBS_SNAPSHOT_PUBLIC_RESTORABLE_CHECK}
+
+  CfgRuleMFAConsole:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: MFA_ENABLED_FOR_IAM_CONSOLE_ACCESS}
+
+  CfgRuleIAMNoInlinePolicy:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: IAM_NO_INLINE_POLICY_CHECK}
+
+  CfgRuleS3DefaultEncryption:
+    Type: AWS::Config::ConfigRule
+    DependsOn: ConfigRecorder
+    Properties:
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_SERVER_SIDE_ENCRYPTION_ENABLED}
+
+  # -- Multi-region hardener Lambda ------------------------------------------
+  # On stack creation:
+  #   Per region: EBS encryption, GuardDuty, Security Hub, Access Analyzer,
+  #               VPC flow logs on every VPC that lacks them
+  #   Global:     IAM password policy, S3 versioning + TLS on every bucket
+
+  HardenerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: HardenerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:EnableEbsEncryptionByDefault
+                  - ec2:GetEbsEncryptionByDefault
+                  - ec2:DescribeRegions
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeFlowLogs
+                  - ec2:CreateFlowLogs
+                  - guardduty:CreateDetector
+                  - guardduty:ListDetectors
+                  - securityhub:EnableSecurityHub
+                  - securityhub:DescribeHub
+                  - access-analyzer:CreateAnalyzer
+                  - access-analyzer:ListAnalyzers
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:CreateLogDelivery
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketVersioning
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketLocation
+                  - iam:UpdateAccountPasswordPolicy
+                  - iam:CreateServiceLinkedRole
+                Resource: '*'
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt FlowLogRole.Arn
+
+  HardenerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt HardenerRole.Arn
+      Timeout: 600
+      Environment:
+        Variables:
+          FLOW_LOG_ROLE_ARN: !GetAtt FlowLogRole.Arn
+      Code:
+        ZipFile: |
+          import boto3, json, os, urllib.request
+
+          def send(event, context, status, reason=''):
+              body = json.dumps({
+                  'Status': status,
+                  'Reason': reason[:255],
+                  'PhysicalResourceId': 'PerfectScoreHardener',
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+              }).encode()
+              req = urllib.request.Request(
+                  event['ResponseURL'], data=body, method='PUT',
+                  headers={'Content-Type': ''})
+              urllib.request.urlopen(req)
+
+          def handler(event, context):
+              if event['RequestType'] == 'Delete':
+                  send(event, context, 'SUCCESS')
+                  return
+
+              flow_log_role = os.environ['FLOW_LOG_ROLE_ARN']
+              errors = []
+
+              try:
+                  regions = [r['RegionName'] for r in
+                      boto3.client('ec2', region_name='us-east-1').describe_regions(
+                          Filters=[{'Name': 'opt-in-status',
+                                    'Values': ['opt-in-not-required', 'opted-in']}]
+                      )['Regions']]
+
+                  for region in regions:
+                      ec2 = boto3.client('ec2', region_name=region)
+                      logs = boto3.client('logs', region_name=region)
+
+                      # EBS encryption by default
+                      try:
+                          ec2.enable_ebs_encryption_by_default()
+                      except Exception as e:
+                          errors.append(f'EBS {region}: {e}')
+
+                      # GuardDuty
+                      try:
+                          gd = boto3.client('guardduty', region_name=region)
+                          if not gd.list_detectors()['DetectorIds']:
+                              gd.create_detector(Enable=True)
+                      except Exception as e:
+                          errors.append(f'GD {region}: {e}')
+
+                      # Security Hub
+                      try:
+                          sh = boto3.client('securityhub', region_name=region)
+                          sh.enable_security_hub(EnableDefaultStandards=False)
+                      except Exception as e:
+                          if 'already' not in str(e).lower() and 'ResourceConflict' not in str(e):
+                              errors.append(f'SH {region}: {e}')
+
+                      # IAM Access Analyzer
+                      try:
+                          aa = boto3.client('accessanalyzer', region_name=region)
+                          if not aa.list_analyzers(type='ACCOUNT')['analyzers']:
+                              aa.create_analyzer(analyzerName='hardener-analyzer', type='ACCOUNT')
+                      except Exception as e:
+                          errors.append(f'AA {region}: {e}')
+
+                      # VPC flow logs -- enable on every VPC that lacks them
+                      try:
+                          vpcs = [v['VpcId'] for v in ec2.describe_vpcs()['Vpcs']]
+                          covered = {fl['ResourceId'] for fl in
+                                     ec2.describe_flow_logs()['FlowLogs']}
+                          uncovered = [v for v in vpcs if v not in covered]
+                          if uncovered:
+                              lg = f'/aws/vpc/hardener-{region}'
+                              try:
+                                  logs.create_log_group(logGroupName=lg)
+                              except Exception:
+                                  pass  # already exists
+                              ec2.create_flow_logs(
+                                  ResourceIds=uncovered,
+                                  ResourceType='VPC',
+                                  TrafficType='ALL',
+                                  LogDestinationType='cloud-watch-logs',
+                                  LogGroupName=lg,
+                                  DeliverLogsPermissionArn=flow_log_role,
+                              )
+                      except Exception as e:
+                          errors.append(f'FlowLogs {region}: {e}')
+
+                  # IAM password policy (global)
+                  try:
+                      boto3.client('iam').update_account_password_policy(
+                          MinimumPasswordLength=14,
+                          RequireUppercaseCharacters=True,
+                          RequireLowercaseCharacters=True,
+                          RequireNumbers=True,
+                          RequireSymbols=True,
+                          MaxPasswordAge=90,
+                          PasswordReusePrevention=24,
+                          AllowUsersToChangePassword=True,
+                      )
+                  except Exception as e:
+                      errors.append(f'IAM passwd: {e}')
+
+                  # S3 -- versioning + TLS on every bucket (global)
+                  try:
+                      s3 = boto3.client('s3')
+                      buckets = [b['Name'] for b in s3.list_buckets()['Buckets']]
+                      for bucket in buckets:
+                          try:
+                              loc = s3.get_bucket_location(Bucket=bucket)['LocationConstraint']
+                              s3r = boto3.client('s3', region_name=loc or 'us-east-1')
+                          except Exception:
+                              s3r = s3
+
+                          # Enable versioning
+                          try:
+                              s3r.put_bucket_versioning(
+                                  Bucket=bucket,
+                                  VersioningConfiguration={'Status': 'Enabled'},
+                              )
+                          except Exception as e:
+                              errors.append(f'S3 ver {bucket}: {e}')
+
+                          # Enforce TLS — add DenyNonTLS statement if absent
+                          try:
+                              try:
+                                  policy = json.loads(
+                                      s3r.get_bucket_policy(Bucket=bucket)['Policy'])
+                              except Exception as ex:
+                                  if 'NoSuchBucketPolicy' in str(ex):
+                                      policy = {'Version': '2012-10-17', 'Statement': []}
+                                  else:
+                                      raise
+                              sids = {st.get('Sid', '') for st in policy['Statement']}
+                              if 'DenyNonTLS' not in sids:
+                                  policy['Statement'].append({
+                                      'Sid': 'DenyNonTLS',
+                                      'Effect': 'Deny',
+                                      'Principal': '*',
+                                      'Action': 's3:*',
+                                      'Resource': [
+                                          f'arn:aws:s3:::{bucket}',
+                                          f'arn:aws:s3:::{bucket}/*',
+                                      ],
+                                      'Condition': {
+                                          'Bool': {'aws:SecureTransport': 'false'}
+                                      },
+                                  })
+                                  s3r.put_bucket_policy(
+                                      Bucket=bucket, Policy=json.dumps(policy))
+                          except Exception as e:
+                              errors.append(f'S3 TLS {bucket}: {e}')
+                  except Exception as e:
+                      errors.append(f'S3 global: {e}')
+
+              except Exception as e:
+                  send(event, context, 'FAILED', str(e))
+                  return
+
+              msg = ('All regions hardened.' if not errors
+                     else f'Done with {len(errors)} error(s): {errors[:3]}')
+              send(event, context, 'SUCCESS', msg)
+
+  HardenerResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt HardenerFunction.Arn
+
+  #CloudWatch alarms
+  AlarmCPU1:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-cpu-high-1'
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance1}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmCPU2:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-cpu-high-2'
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance2}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmStatus1:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-status-1'
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance1}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  AlarmStatus2:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-status-2'
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance2}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  AlarmRDSCPU:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-rds-cpu'
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions: [{Name: DBInstanceIdentifier, Value: !Ref RDSInstance}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmRDSStorage:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-rds-storage'
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions: [{Name: DBInstanceIdentifier, Value: !Ref RDSInstance}]
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5368709120
+      ComparisonOperator: LessThanThreshold
+
+  AlarmRDSConnections:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-rds-connections'
+      Namespace: AWS/RDS
+      MetricName: DatabaseConnections
+      Dimensions: [{Name: DBInstanceIdentifier, Value: !Ref RDSInstance}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmCFErrors:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-cf-5xx'
+      Namespace: AWS/CloudFront
+      MetricName: 5xxErrorRate
+      Dimensions:
+        - {Name: DistributionId, Value: !Ref CFDistribution}
+        - {Name: Region, Value: Global}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmVPCFlowLog:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-vpc-flowlog'
+      Namespace: AWS/Logs
+      MetricName: IncomingBytes
+      Dimensions: [{Name: LogGroupName, Value: !Ref FlowLogGroup}]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  AlarmNetworkIn:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-network-in-high'
+      Namespace: AWS/EC2
+      MetricName: NetworkIn
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance1}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 52428800
+      ComparisonOperator: GreaterThanThreshold
+
+Outputs:
+  VPCId:
+    Value: !Ref VPC
+  RDSEndpoint:
+    Value: !GetAtt RDSInstance.Endpoint.Address
+  AppBucket:
+    Value: !Ref AppBucket
+  CloudFrontDomain:
+    Value: !GetAtt CFDistribution.DomainName
+  TrailArn:
+    Value: !GetAtt Trail.Arn
+  HardenerStatus:
+    Value: !Ref HardenerResource
+  ExpectedScore:
+    Value: '850'

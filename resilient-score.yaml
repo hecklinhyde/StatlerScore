@@ -456,218 +456,102 @@ Resources:
             Lifecycle:
               DeleteAfterDays: 365
 
-  # AWS Config
-  # TAKES A LONG TIME TO LOAD EXCLUDED FOR NOW JUST MANUALLY DONE IN THE ACCOUNT FOR THIS TIER
-  ConfigRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal: {Service: config.amazonaws.com}
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ConfigRecorderPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Sid: ConfigReadAll
-                Effect: Allow
-                Action:
-                  - acm:Describe*
-                  - acm:List*
-                  - cloudformation:Describe*
-                  - cloudformation:List*
-                  - cloudtrail:Describe*
-                  - cloudtrail:Get*
-                  - cloudtrail:List*
-                  - cloudwatch:Describe*
-                  - cloudwatch:Get*
-                  - cloudwatch:List*
-                  - config:Describe*
-                  - config:Get*
-                  - config:List*
-                  - config:Put*
-                  - config:Select*
-                  - config:BatchGet*
-                  - ec2:Describe*
-                  - ec2:Get*
-                  - elasticloadbalancing:Describe*
-                  - guardduty:Get*
-                  - guardduty:List*
-                  - iam:GenerateCredentialReport
-                  - iam:Get*
-                  - iam:List*
-                  - lambda:Get*
-                  - lambda:List*
-                  - rds:Describe*
-                  - rds:List*
-                  - s3:GetBucket*
-                  - s3:GetEncryptionConfiguration
-                  - s3:GetLifecycleConfiguration
-                  - s3:ListAllMyBuckets
-                  - securityhub:Describe*
-                  - securityhub:Get*
-                  - securityhub:List*
-                  - sns:Get*
-                  - sns:List*
-                  - sqs:Get*
-                  - sqs:List*
-                  - backup:List*
-                  - backup:Describe*
-                  - backup:Get*
-                Resource: '*'
-              - Sid: ConfigS3Delivery
-                Effect: Allow
-                Action: s3:PutObject
-                Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
-                Condition:
-                  StringEquals:
-                    s3:x-amz-acl: bucket-owner-full-control
-              - Sid: ConfigS3BucketAcl
-                Effect: Allow
-                Action: s3:GetBucketAcl
-                Resource: !GetAtt ConfigBucket.Arn
+  # # AWS Config
+  # # TAKES A LONG TIME TO LOAD EXCLUDED FOR NOW JUST MANUALLY DONE IN THE ACCOUNT FOR THIS TIER
+  # ConfigRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal: {Service: config.amazonaws.com}
+  #           Action: sts:AssumeRole
+  #     Policies:
+  #       - PolicyName: ConfigRecorderPolicy
+  #         PolicyDocument:
+  #           Version: '2012-10-17'
+  #           Statement:
+  #             - Sid: ConfigReadAll
+  #               Effect: Allow
+  #               Action:
+  #                 - acm:Describe*
+  #                 - acm:List*
+  #                 - cloudformation:Describe*
+  #                 - cloudformation:List*
+  #                 - cloudtrail:Describe*
+  #                 - cloudtrail:Get*
+  #                 - cloudtrail:List*
+  #                 - cloudwatch:Describe*
+  #                 - cloudwatch:Get*
+  #                 - cloudwatch:List*
+  #                 - config:Describe*
+  #                 - config:Get*
+  #                 - config:List*
+  #                 - config:Put*
+  #                 - config:Select*
+  #                 - config:BatchGet*
+  #                 - ec2:Describe*
+  #                 - ec2:Get*
+  #                 - elasticloadbalancing:Describe*
+  #                 - guardduty:Get*
+  #                 - guardduty:List*
+  #                 - iam:GenerateCredentialReport
+  #                 - iam:Get*
+  #                 - iam:List*
+  #                 - lambda:Get*
+  #                 - lambda:List*
+  #                 - rds:Describe*
+  #                 - rds:List*
+  #                 - s3:GetBucket*
+  #                 - s3:GetEncryptionConfiguration
+  #                 - s3:GetLifecycleConfiguration
+  #                 - s3:ListAllMyBuckets
+  #                 - securityhub:Describe*
+  #                 - securityhub:Get*
+  #                 - securityhub:List*
+  #                 - sns:Get*
+  #                 - sns:List*
+  #                 - sqs:Get*
+  #                 - sqs:List*
+  #                 - backup:List*
+  #                 - backup:Describe*
+  #                 - backup:Get*
+  #               Resource: '*'
+  #             - Sid: ConfigS3Delivery
+  #               Effect: Allow
+  #               Action: s3:PutObject
+  #               Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+  #               Condition:
+  #                 StringEquals:
+  #                   s3:x-amz-acl: bucket-owner-full-control
+  #             - Sid: ConfigS3BucketAcl
+  #               Effect: Allow
+  #               Action: s3:GetBucketAcl
+  #               Resource: !GetAtt ConfigBucket.Arn
 
-  ConfigRecorder:
-    Type: AWS::Config::ConfigurationRecorder
-    DependsOn: ConfigBucketPolicy
-    Properties:
-      RoleARN: !GetAtt ConfigRole.Arn
-      RecordingGroup:
-        AllSupported: true
-        IncludeGlobalResourceTypes: true
+  # ConfigRecorder:
+  #   Type: AWS::Config::ConfigurationRecorder
+  #   DependsOn: ConfigBucketPolicy
+  #   Properties:
+  #     RoleARN: !GetAtt ConfigRole.Arn
+  #     RecordingGroup:
+  #       AllSupported: true
+  #       IncludeGlobalResourceTypes: true
 
-  ConfigDeliveryChannel:
-    Type: AWS::Config::DeliveryChannel
-    DependsOn: ConfigRecorder
-    Properties:
-      S3BucketName: !Ref ConfigBucket
-      ConfigSnapshotDeliveryProperties:
-        DeliveryFrequency: Six_Hours
+  # ConfigDeliveryChannel:
+  #   Type: AWS::Config::DeliveryChannel
+  #   DependsOn: ConfigRecorder
+  #   Properties:
+  #     S3BucketName: !Ref ConfigBucket
+  #     ConfigSnapshotDeliveryProperties:
+  #       DeliveryFrequency: Six_Hours
 
-  CfgRuleRootMFA:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: ROOT_ACCOUNT_MFA_ENABLED}
-
-  CfgRuleIAMPasswordPolicy:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: IAM_PASSWORD_POLICY}
-
-  CfgRuleIAMUserMFA:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: IAM_USER_MFA_ENABLED}
-
-  CfgRuleAccessKeysRotated:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: ACCESS_KEYS_ROTATED}
-      InputParameters:
-        maxAccessKeyAge: '360'
-
-  CfgRuleIMDSv2:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: EC2_IMDSV2_CHECK}
-
-  CfgRuleS3PublicRead:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_PUBLIC_READ_PROHIBITED}
-
-  CfgRuleS3PublicWrite:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_PUBLIC_WRITE_PROHIBITED}
-
-  CfgRuleS3Versioning:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_VERSIONING_ENABLED}
-
-  CfgRuleS3Logging:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_LOGGING_ENABLED}
-
-  CfgRuleRDSPublicAccess:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: RDS_INSTANCE_PUBLIC_ACCESS_CHECK}
-
-  CfgRuleRDSMultiAZ:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: RDS_MULTI_AZ_SUPPORT}
-
-  CfgRuleRDSEncrypted:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: RDS_STORAGE_ENCRYPTED}
-
-  CfgRuleCloudTrailEnabled:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: CLOUD_TRAIL_ENABLED}
-
-  CfgRuleCloudTrailLogValidation:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: CLOUD_TRAIL_LOG_FILE_VALIDATION_ENABLED}
-
-  CfgRuleEncryptedVolumes:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: ENCRYPTED_VOLUMES}
-
-  CfgRuleVPCFlowLogs:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: VPC_FLOW_LOGS_ENABLED}
-
-  CfgRuleEBSSnapshotPublic:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: EBS_SNAPSHOT_PUBLIC_RESTORABLE_CHECK}
-
-  CfgRuleMFAConsole:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: MFA_ENABLED_FOR_IAM_CONSOLE_ACCESS}
-
-  CfgRuleIAMNoInlinePolicy:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: IAM_NO_INLINE_POLICY_CHECK}
-
-  CfgRuleS3DefaultEncryption:
-    Type: AWS::Config::ConfigRule
-    DependsOn: ConfigRecorder
-    Properties:
-      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_SERVER_SIDE_ENCRYPTION_ENABLED}
+  # CfgRuleRootMFA:
+  #   Type: AWS::Config::ConfigRule
+  #   DependsOn: ConfigRecorder
+  #   Properties:
+  #     Source: {Owner: AWS, SourceIdentifier: ROOT_ACCOUNT_MFA_ENABLED}
 
   # -- Multi-region hardener Lambda ------------------------------------------
   # On stack creation:

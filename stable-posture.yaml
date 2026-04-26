@@ -1,0 +1,701 @@
+# https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/format-version-structure.html
+# 2010-09-09 is the only valid value
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Stable posture Demo. Well-configured AWS environment that scores in
+  the "Stable posture" Statler Score looks like.
+  703 = Stable posture
+  WARNING: Never use in production.
+
+Parameters:
+  ARM64AMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-arm64-gp2
+    Description: Latest Amazon Linux 2 ARM64 AMI -- required for Graviton t4g instances
+
+Resources:
+
+  #VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: stable-posture-vpc}]
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+
+  IGW:
+    Type: AWS::EC2::InternetGateway
+
+  IGWAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttach
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+
+  RTAssocA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTable
+
+  RTAssocB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTable
+
+  #Security groups
+
+  SGOpenSSH:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH open to world
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: 0.0.0.0/0}
+
+  SGOpenRDP:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RDP open to world
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 3389, ToPort: 3389, CidrIp: 0.0.0.0/0}
+
+  SGInternal:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: IInternal-only used by RDS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SGOpenSSH
+
+  #EC2
+
+  Instance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t4g.micro
+      ImageId: !Ref ARM64AMI
+      SubnetId: !Ref SubnetA
+      SecurityGroupIds: [!Ref SGOpenSSH]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      Tags:
+        - Key: Name
+          Value: stable-posture-instance-az1
+
+  Instance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t4g.micro
+      ImageId: !Ref ARM64AMI
+      SubnetId: !Ref SubnetB
+      SecurityGroupIds: [!Ref SGOpenRDP]
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      Tags:
+        - Key: Name
+          Value: stable-posture-instance-az2
+
+  #Auto Scaling group
+  ASGLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: stable-posture-lt
+      LaunchTemplateData:
+        InstanceType: t4g.micro
+        ImageId: !Ref ARM64AMI
+        MetadataOptions:
+          HttpTokens: required
+          HttpEndpoint: enabled
+
+  ASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: stable-posture-asg
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ASGLaunchTemplate
+        Version: !GetAtt ASGLaunchTemplate.LatestVersionNumber
+      MinSize: '0'
+      MaxSize: '4'
+      DesiredCapacity: '0'
+      VPCZoneIdentifier: [!Ref SubnetA, !Ref SubnetB]
+
+  #RDS
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Stable Posture DB subnet group
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: '8.0'
+      MasterUsername: admin
+      MasterUserPassword: StableDemo2024!
+      AllocatedStorage: '20'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups: [!Ref SGInternal]
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 7
+      MultiAZ: false
+      StorageEncrypted: true
+      DeletionProtection: false
+
+  #S3
+  LogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'stable-posture-logs-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  LogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowS3LogDelivery
+            Effect: Allow
+            Principal: {Service: logging.s3.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${LogBucket.Arn}/*'
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:aws:s3:::stable-posture-app-${AWS::AccountId}-${AWS::Region}'
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  #Application bucket
+  AppBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: LogBucketPolicy
+    Properties:
+      BucketName: !Sub 'stable-posture-app-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionAndExpire
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: STANDARD_IA
+              - TransitionInDays: 180
+                StorageClass: GLACIER
+            ExpirationInDays: 365
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LogBucket
+        LogFilePrefix: app-access-logs/
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  AppBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AppBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyNonTLS
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt AppBucket.Arn
+              - !Sub '${AppBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  #CloudTrail log bucket
+  TrailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'stable-posture-trail-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  TrailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TrailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt TrailBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${TrailBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  #Config delivery bucket
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'stable-posture-config-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ConfigBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ConfigBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSConfigBucketPermissionsCheck
+            Effect: Allow
+            Principal: {Service: config.amazonaws.com}
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt ConfigBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AWSConfigBucketExistenceCheck
+            Effect: Allow
+            Principal: {Service: config.amazonaws.com}
+            Action: s3:ListBucket
+            Resource: !GetAtt ConfigBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+          - Sid: AWSConfigBucketDelivery
+            Effect: Allow
+            Principal: {Service: config.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  #CloudTrail 
+  TrailLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/cloudtrail/stable-posture-trail
+      RetentionInDays: 90
+
+  TrailCWRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: stable-posture-cloudtrail-cw-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudtrail.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudTrailToCloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub '${TrailLogGroup.Arn}:*'
+
+  Trail:
+    Type: AWS::CloudTrail::Trail
+    DependsOn: TrailBucketPolicy
+    Properties:
+      TrailName: good-credit-trail
+      S3BucketName: !Ref TrailBucket
+      IsLogging: true
+      IsMultiRegionTrail: true
+      EnableLogFileValidation: true
+      CloudWatchLogsLogGroupArn: !GetAtt TrailLogGroup.Arn
+      CloudWatchLogsRoleArn: !GetAtt TrailCWRole.Arn
+      IncludeGlobalServiceEvents: true
+
+  #AWS Config 
+  ConfigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: stable-posture-config-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: config.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWS_ConfigRole
+      Policies:
+        - PolicyName: ConfigS3Delivery
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetBucketAcl, s3:ListBucket]
+                Resource: !GetAtt ConfigBucket.Arn
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub '${ConfigBucket.Arn}/AWSLogs/${AWS::AccountId}/Config/*'
+
+  ConfigRecorder:
+    Type: AWS::Config::ConfigurationRecorder
+    DependsOn: ConfigRole
+    Properties:
+      Name: good-credit-recorder
+      RoleARN: !GetAtt ConfigRole.Arn
+      RecordingGroup:
+        AllSupported: true
+        IncludeGlobalResourceTypes: true
+
+  ConfigDeliveryChannel:
+    Type: AWS::Config::DeliveryChannel
+    DependsOn: [ConfigRecorder, ConfigBucketPolicy]
+    Properties:
+      Name: good-credit-delivery
+      S3BucketName: !Ref ConfigBucket
+
+  #Config rules
+  ConfigRuleCloudTrail:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-cloudtrail-enabled
+      Source: {Owner: AWS, SourceIdentifier: CLOUD_TRAIL_ENABLED}
+
+  ConfigRuleTrailValidation:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-cloudtrail-log-validation
+      Source: {Owner: AWS, SourceIdentifier: CLOUD_TRAIL_LOG_FILE_VALIDATION_ENABLED}
+
+  ConfigRuleRootMFA:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-root-mfa
+      Source: {Owner: AWS, SourceIdentifier: ROOT_ACCOUNT_MFA_ENABLED}
+
+  ConfigRuleS3PublicRead:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-s3-public-read
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_PUBLIC_READ_PROHIBITED}
+
+  ConfigRuleS3PublicWrite:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-s3-public-write
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_PUBLIC_WRITE_PROHIBITED}
+
+  ConfigRuleS3Versioning:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-s3-versioning
+      Source: {Owner: AWS, SourceIdentifier: S3_BUCKET_VERSIONING_ENABLED}
+
+  ConfigRuleEncryptedVolumes:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-encrypted-volumes
+      Source: {Owner: AWS, SourceIdentifier: ENCRYPTED_VOLUMES}
+
+  ConfigRuleRDSPublic:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-rds-not-public
+      Source: {Owner: AWS, SourceIdentifier: RDS_INSTANCE_PUBLIC_ACCESS_CHECK}
+
+  ConfigRuleVPCFlowLogs:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-vpc-flow-logs
+      Source: {Owner: AWS, SourceIdentifier: VPC_FLOW_LOGS_ENABLED}
+
+  ConfigRuleGuardDuty:
+    Type: AWS::Config::ConfigRule
+    DependsOn: [ConfigRecorder, ConfigDeliveryChannel]
+    Properties:
+      ConfigRuleName: check-guardduty
+      Source: {Owner: AWS, SourceIdentifier: GUARDDUTY_ENABLED_CENTRALIZED}
+
+  #IAM Access Analyzer
+  AccessAnalyzer:
+    Type: AWS::AccessAnalyzer::Analyzer
+    Properties:
+      AnalyzerName: stable-posture-analyzer
+      Type: ACCOUNT
+
+  # AWS Backup
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: stable-posture-vault
+
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: stable-posture-plan
+        BackupPlanRule:
+          - RuleName: DailyBackup
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: 'cron(0 3 * * ? *)'
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle:
+              DeleteAfterDays: 35
+          - RuleName: MonthlyBackup
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: 'cron(0 5 1 * ? *)'
+            StartWindowMinutes: 120
+            CompletionWindowMinutes: 360
+            Lifecycle:
+              DeleteAfterDays: 365
+
+  #CloudWatch alarms
+
+  AlarmCPU1:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-cpu-high-instance1
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance1}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmCPU2:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-cpu-high-instance2
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance2}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmStatus1:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-status-instance1
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance1}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  AlarmStatus2:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-status-instance2
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance2}]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+
+  AlarmCreditBalance:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-cpu-credit-low-instance1
+      Namespace: AWS/EC2
+      MetricName: CPUCreditBalance
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance1}]
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 20
+      ComparisonOperator: LessThanThreshold
+
+  AlarmNetworkIn:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-network-in-high-instance2
+      Namespace: AWS/EC2
+      MetricName: NetworkIn
+      Dimensions: [{Name: InstanceId, Value: !Ref Instance2}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1000000000
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmRDSCPU:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-rds-cpu-high
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions: [{Name: DBInstanceIdentifier, Value: !Ref RDSInstance}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmRDSStorage:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-rds-storage-low
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions: [{Name: DBInstanceIdentifier, Value: !Ref RDSInstance}]
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5368709120   # 5 GB in bytes
+      ComparisonOperator: LessThanThreshold
+
+  AlarmRDSConnections:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-rds-connections-high
+      Namespace: AWS/RDS
+      MetricName: DatabaseConnections
+      Dimensions: [{Name: DBInstanceIdentifier, Value: !Ref RDSInstance}]
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 50
+      ComparisonOperator: GreaterThanThreshold
+
+  AlarmASGCapacity:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: stable-asg-in-service-capacity
+      Namespace: AWS/AutoScaling
+      MetricName: GroupInServiceCapacity
+      Dimensions: [{Name: AutoScalingGroupName, Value: !Ref ASG}]
+      Statistic: Minimum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: LessThanOrEqualToThreshold
+
+Outputs:
+  VPCId:
+    Value: !Ref VPC
+
+  Instance1Id:
+    Value: !Ref Instance1
+
+  Instance2Id:
+    Value: !Ref Instance2
+
+  ASGName:
+    Value: !Ref ASG
+
+  RDSEndpoint:
+    Value: !GetAtt RDSInstance.Endpoint.Address
+
+  AppBucket:
+    Value: !Ref AppBucket
+
+  AnalyzerId:
+    Value: !Ref AccessAnalyzer
+
+  BackupPlanId:
+    Value: !Ref BackupPlan
+
+  TrailArn:
+    Value: !GetAtt Trail.Arn
+
+  ExpectedScore:
+    Description: Expected Statler Score range
+    Value: "670-740"

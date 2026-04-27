@@ -996,4 +996,4 @@ Outputs:
     Value: !Ref HardenerResource
   ExpectedScore:
     Description: Expected Cloud Credit Score range
-    Value: "848-850 "
+    Value: "740-800 "

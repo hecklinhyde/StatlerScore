@@ -1,7 +1,35 @@
 # StatlerScore
 A quantitative framework that translates complex cloud infrastructure security risks into an accessible 300–850 scale
 
-## ✒️ Citing
+## Run the Bureau
+python3.13 -m venv venv
+source venv/bin/activate
+pip3 install -r requirements.txt
+uvicorn src.verification.api:app --host 0.0.0.0 --port 8000 
+
+nohup python3 -m uvicorn src.verification.api:app \
+    --host 0.0.0.0 --port 8000 --workers 2 \
+    > api.log 2>&1 &
+
+
+sudo tee /etc/systemd/system/statlerscore.service << EOF
+[Unit]
+Description=StatlerScore Bureau
+After=network.target
+
+[Service]
+User=ec2-user
+WorkingDirectory=/home/ec2-user
+EnvironmentFile=/home/ec2-user/.env
+ExecStart=/home/ec2-user/venv/bin/uvicorn src.verification.api:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+## Citing
 
 ```bibtex
 @software{Statler Score,

@@ -207,6 +207,7 @@ def scorePerformanceEfficiency(prf: dict) -> tuple[float, list]:
     ]
     return avg(signals), signals
 
+#Will need more proof, tests worked fine but will this work for a larger env?
 SCORE_CURVE = [
     (0.00, 300),
     (0.47, 580),

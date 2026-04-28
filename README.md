@@ -1,6 +1,12 @@
 # StatlerScore
 A quantitative framework that translates complex cloud infrastructure security risks into an accessible 300–850 scale
 
+## Disclaimer
+Statler Score was designed as part of the Online Master of Science in Cybersecurity Practicum at Georgia Institute of Technology. Score estimates are based on the automated analysis of Amazon Web Services (AWS) account posture against the Well-Architected Framework and should not be construed as professional security audit findings. Consult a qualified cloud security practitioner before making architecture changes in production environments.
+
+## How to
+Save your credientials as an environment variable or login to AWS with aws configure sso.
+
 ## Run the Bureau
 python3.13 -m venv venv
 source venv/bin/activate

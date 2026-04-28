@@ -1,37 +1,24 @@
-"""
-Submits AWS evidence to the Cloud Credit Bureau and prints the signed report.
-
-Start the bureau first:
-    python -m uvicorn src.verification.api:app --reload --port 8000
-
-Set USE_MOCK=1 to use the built-in mock evidence instead (no AWS credentials needed).
-Initial commit of the proram
-"""
-
 import os
-
-# Point matplotlib at a minimal config before it initialises, suppressing
-# "Bad key" warnings from the outdated system-wide matplotlibrc.
 os.environ.setdefault(
     "MATPLOTLIBRC",
     os.path.dirname(os.path.abspath(__file__)),
 )
 import sys
 import requests
-
 from src.aws_auth import setup_aws_session
 from src.collectors.cloudharvester import CloudHarvester
 from src.reporting.render import generateReport
-from src.reporting.visualize import generateScoreImage, generatePillarImage
+from src.reporting.visualize import generateScoreImage
 
+# Defaults to local host, EC2 environment is: 
 BUREAU_URL = "http://localhost:8000"
 ACCOUNT_ID = os.environ["CCB_ACCOUNT_ID"]
 HEADERS    = {"Authorization": f"Bearer {os.environ['CCB_API_KEY']}"}
 
-# ── Evidence collection ───────────────────────────────────────────────────────
-
+# ── Data Harvest START ───────────────────────────────────────────────────────
+# Change the mock evidence as needed while statler is in development 
 if os.getenv("USE_MOCK") == "1":
-    print("Using mock evidence (USE_MOCK=1).")
+    print("Using mock evidence.")
     evidence = {
         'security': {
             'root_mfa_enabled':          True,
@@ -86,16 +73,15 @@ if os.getenv("USE_MOCK") == "1":
         },
     }
 else:
-    print("Collecting live AWS evidence...")
+    print("Connecting to AWS.")
     session  = setup_aws_session()
     evidence = CloudHarvester(session).collect()
-    print("Collection complete.")
-
-# ── Submit to bureau ──────────────────────────────────────────────────────────
-
+    print("Cloud data harvested.")
+# ── Data Harvest END ───────────────────────────────────────────────────────
+# ── Submit to bureau START ──────────────────────────────────────────────────────────
 try:
     prevResponse  = requests.get(f"{BUREAU_URL}/score/{ACCOUNT_ID}/latest", headers=HEADERS, timeout=5)
-    previousScore = prevResponse.json()["score"] if prevResponse.status_code == 200 else None
+    prevScore = prevResponse.json()["score"] if prevResponse.status_code == 200 else None
 
     response = requests.post(
         f"{BUREAU_URL}/attest",
@@ -117,11 +103,11 @@ except requests.exceptions.HTTPError as exc:
     print(f"Bureau returned an error: {exc}\n{response.text}")
     sys.exit(1)
 
-if previousScore is None:
+if prevScore is None:
     previousScore = attestation["score"]
 
 print(generateReport(attestation, previousScore=previousScore))
 
 scorePath  = generateScoreImage(attestation,  previousScore=previousScore)
-pillarPath = generatePillarImage(attestation, previousScore=previousScore)
-print(f"\nImages saved → {scorePath}  |  {pillarPath}")
+print(f"\nImages saved → {scorePath}")
+# ── Submit to bureau END ──────────────────────────────────────────────────────────

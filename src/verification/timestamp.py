@@ -13,12 +13,8 @@ on the root cannot be forged or backdated.
 Stamping:    POST root bytes → TSA → TSR (DER, base64-stored)
 Verification: openssl ts -verify -in tsr.der -data root.dat -CAfile system-ca
 
-TSA: DigiCert (http://timestamp.digicert.com)
-     - Free, high-availability, widely trusted
-     - Certificate is included in the TSR so openssl can verify without
-       a separately downloaded CA cert
+TSA: rfc3161.ai.moda (https://rfc3161.ai.moda)
 """
-
 import base64
 import os
 import subprocess
@@ -27,7 +23,9 @@ import tempfile
 import rfc3161ng
 from pyasn1.codec.der import encoder
 
-TSA_URL = os.getenv("TSA_URL", "http://timestamp.digicert.com")
+TSA_URL = os.getenv("TSA_URL", "https://rfc3161.ai.moda")
+
+TSA_URL = os.getenv("BACK_UP_TSA_URL", "https://freetsa.org")
 
 
 def stampRoot(root: str) -> dict:
@@ -53,34 +51,22 @@ def stampRoot(root: str) -> dict:
     }
 
 
-def verifyAnchor(root: str, tsrB64: str) -> dict:
-    """
-    Verify a stored TSR against the Merkle root using openssl ts.
-    Returns verified=True if the TSA signature and data match.
-    """
-    tsrBytes  = base64.b64decode(tsrB64)
-    dataBytes = root.encode()
-
+def verifyAnchor(root, tsrB64):
     tsrFile  = tempfile.NamedTemporaryFile(delete=False, suffix=".tsr")
     dataFile = tempfile.NamedTemporaryFile(delete=False, suffix=".dat")
     try:
-        tsrFile.write(tsrBytes);  tsrFile.close()
-        dataFile.write(dataBytes); dataFile.close()
+        tsrFile.write(base64.b64decode(tsrB64)); tsrFile.close()
+        dataFile.write(root.encode());           dataFile.close()
 
         result = subprocess.run(
-            [
-                "openssl", "ts", "-verify",
-                "-in",      tsrFile.name,
-                "-data",    dataFile.name,
-                "-CAfile",  "/etc/ssl/certs/ca-certificates.crt",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=15,
+            ["openssl", "ts", "-verify",
+             "-in",     tsrFile.name,
+             "-data",   dataFile.name,
+             "-CAfile", "/etc/ssl/certs/ca-certificates.crt"],
+            capture_output=True, text=True, timeout=15,
         )
-        verified = result.returncode == 0
         return {
-            "verified": verified,
+            "verified": result.returncode == 0,
             "message":  result.stdout.strip() or result.stderr.strip(),
         }
     except subprocess.TimeoutExpired:

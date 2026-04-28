@@ -1,10 +1,4 @@
-"""
-Persistent attestation log with hash-chain integrity.
-
-Every record links back to the SHA-256 of the one before it. Deletions,
-insertions, and reorderings all break the chain at the tampered point.
-"""
-
+import fcntl
 import json
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +6,16 @@ from pathlib import Path
 from typing import Optional
 
 from src.verification.merkle import recordHash
+
+
+def _write_locked(path, fn):
+    with open(path, 'r+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        records = json.load(f)
+        fn(records)
+        f.seek(0)
+        f.truncate()
+        json.dump(records, f, indent=2)
 
 DB_PATH      = Path(__file__).resolve().parent.parent.parent / "data" / "processed" / "attestations.json"
 GENESIS_HASH = "0" * 64
@@ -70,9 +74,7 @@ class AttestationStore:
         }
 
     def append(self, record: dict) -> None:
-        records = self.load()
-        records.append(record)
-        self.save(records)
+        _write_locked(self.path, lambda records: records.append(record))
 
     def getById(self, attestationId: str) -> Optional[dict]:
         return next(
@@ -118,9 +120,7 @@ class OrgStore:
             "api_key_hash":   apiKeyHash,
             "created_at":     datetime.now(timezone.utc).isoformat(),
         }
-        records = self.load()
-        records.append(org)
-        self.save(records)
+        _write_locked(self.path, lambda records: records.append(org))
         return org
 
     def getById(self, orgId: str) -> Optional[dict]:
@@ -149,9 +149,7 @@ class AnchorStore:
         self.path.write_text(json.dumps(records, indent=2))
 
     def append(self, anchor: dict) -> None:
-        records = self.load()
-        records.append(anchor)
-        self.save(records)
+        _write_locked(self.path, lambda records: records.append(anchor))
 
     def getLatest(self) -> Optional[dict]:
         records = self.load()

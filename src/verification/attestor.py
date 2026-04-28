@@ -1,16 +1,3 @@
-"""
-Cryptographic signing and verification for attestation records.
-
-Each record is HMAC-SHA256 signed over:
-    evidence_hash | timestamp | account_id | prev_hash | valid_until
-
-Binding valid_until into the signature means the bureau can't quietly
-extend or shorten a score's validity after the fact.
-
-Legacy records (pre-expiry) only have four fields in the signature —
-verifyAttestation handles both formats so old logs stay valid.
-"""
-
 import hashlib
 import hmac
 import json
@@ -33,21 +20,19 @@ EXPIRY_WARN = 14
 
 GENESIS_HASH = "0" * 64
 
-# RENAME 
 VERDICTS = [
-    (800, "Exceptional"),
-    (740, "Very Good"),
-    (670, "Good"),
-    (580, "Fair"),
-    (0,   "Poor"),
+    (800, "Resilient Posture"),
+    (740, "Strong Posture"),
+    (670, "Stable Posture"),
+    (580, "Accumulating Technical Risk"),
+    (0,   "Critical Remediation Required"),
 ]
-
 
 def verdictFor(score: int) -> str:
     for threshold, label in VERDICTS:
         if score >= threshold:
             return label
-    return "Poor"
+    return "Critical Remediation Required"
 
 
 def agentHash() -> str:
@@ -148,3 +133,4 @@ def expiryInfo(record: dict) -> dict:
         "expired":        expired,
         "status":         status,
     }
+

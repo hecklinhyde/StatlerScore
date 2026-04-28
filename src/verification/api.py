@@ -1,10 +1,5 @@
 """
-Cloud Credit Bureau — FastAPI service
-
-Acts as an independent scoring authority. Clients submit AWS evidence;
-the bureau scores it, signs the attestation, and appends it to a
-hash-chained log. The Merkle tree lets any third party verify the log's
-integrity without access to the signing key.
+Statler Score Bureau — FastAPI service
 
 Start with:
     uvicorn src.verification.api:app --reload --port 8000

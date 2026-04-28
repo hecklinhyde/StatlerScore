@@ -18,24 +18,23 @@ prefixes, a crafted proof could pass an internal node hash off as a valid leaf.
 
 Odd-length levels are padded by duplicating the last node (Bitcoin-style).
 """
-
 import hashlib
 import hmac
 import json
 from typing import Optional
 
 
-# Domain-separation prefixes per RFC 6962 (Certificate Transparency).
+# Domain-separation prefixes per RFC 9162 (Certificate Transparency).
 LEAF_PREFIX     = b'\x00'
 INTERNAL_PREFIX = b'\x01'
 
 
 def hashLeaf(data: bytes) -> str:
-    """Hash a leaf value with the RFC 6962 leaf domain prefix (0x00)."""
+    """Hash a leaf value with the RFC 9162 leaf domain prefix (0x00)."""
     return hashlib.sha256(LEAF_PREFIX + data).hexdigest()
 
 def hashPair(left: str, right: str) -> str:
-    """Hash two child hashes into a parent with the RFC 6962 internal domain prefix (0x01)."""
+    """Hash two child hashes into a parent with the RFC 9162 internal domain prefix (0x01)."""
     return hashlib.sha256(INTERNAL_PREFIX + bytes.fromhex(left) + bytes.fromhex(right)).hexdigest()
 
 def recordHash(record: dict) -> str:

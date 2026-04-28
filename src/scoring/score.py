@@ -1,6 +1,83 @@
 import math
 
 
+# service -> fields that score 0 when absent; set to None (N/A) when user excludes the service
+_SERVICE_SIGNALS = {
+    "EC2": {
+        "security, privacy, and compliance": {
+            "imdsv2_enforced_ratio", "ebs_encryption_by_default",
+            "deprecated_ami_ratio", "open_security_group_count",
+        },
+        "reliability": {"multi_az_instances"},
+        "operational_excellence": {
+            "unattached_ebs_count", "unused_elastic_ip_count",
+            "old_gen_instance_ratio", "stale_instance_ratio",
+        },
+        "performance_efficiency": {"autoscaling_group_count", "graviton_instances_used"},
+    },
+    "RDS": {
+        "security, privacy, and compliance": {"rds_public_instance_ratio", "rds_public_snapshot_count"},
+        "reliability": {"rds_backup_enabled_ratio", "rds_multi_az_ratio"},
+        "performance_efficiency": {"rds_performance_insights_ratio"},
+    },
+    "S3": {
+        "security, privacy, and compliance": {
+            "s3_public_bucket_ratio", "s3_versioning_ratio",
+            "s3_tls_enforced_ratio", "s3_acl_disabled_ratio",
+        },
+        "reliability": {"s3_buckets_missing_lifecycle"},
+        "operational_excellence": {"s3_access_logging_ratio"},
+    },
+    "EKS": {
+        "reliability": {"eks_cluster_failure_count", "eks_nodegroup_failure_count"},
+        "operational_excellence": {"eks_outdated_cluster_count"},
+    },
+    "CloudTrail": {
+        "reliability": {"cloudtrail_enabled", "cloudtrail_multiregion"},
+        "operational_excellence": {"trail_log_validation", "cloudtrail_cloudwatch_logs"},
+    },
+    "Config": {
+        "reliability": {"config_recorder_active"},
+        "operational_excellence": {"config_rule_count"},
+    },
+    "CloudFront":     {"performance_efficiency": {"cloudfront_distribution_count"}},
+    "GuardDuty":      {"security, privacy, and compliance": {"guardduty_enabled"}},
+    "SecurityHub":    {"security, privacy, and compliance": {"security_hub_enabled"}},
+    "CloudWatch":     {"operational_excellence": {"cloudwatch_alarm_count"}},
+    "Backup":         {"reliability": {"backup_plans_exist"}},
+    "AccessAnalyzer": {"security, privacy, and compliance": {"access_analyzer_active"}},
+    "VPCFlowLogs":    {"security, privacy, and compliance": {"vpc_flow_logs_ratio"}},
+}
+
+ALL_SERVICES = {
+    "EC2":            "instances, EBS encryption, IMDSv2, Auto Scaling, Graviton",
+    "RDS":            "databases, automated backups, Multi-AZ",
+    "S3":             "buckets, versioning, TLS enforcement, access logging",
+    "EKS":            "Kubernetes clusters and node groups",
+    "CloudTrail":     "API activity logging, multi-region, log validation",
+    "Config":         "configuration recorder and compliance rules",
+    "CloudFront":     "CDN distributions",
+    "GuardDuty":      "threat detection",
+    "SecurityHub":    "security standards and findings aggregation",
+    "CloudWatch":     "alarms and metrics",
+    "Backup":         "backup plans and vaults",
+    "AccessAnalyzer": "IAM Access Analyzer",
+    "VPCFlowLogs":    "VPC traffic flow logging",
+}
+
+
+def _applyServiceFilter(data, pillar, active):
+    # null out fields for any service the user said they don't have
+    if active is None:
+        return data
+    result = dict(data)
+    for svc, pillars in _SERVICE_SIGNALS.items():
+        if svc not in active:
+            for field in pillars.get(pillar, set()):
+                result[field] = None
+    return result
+
+
 def flag(value) -> float:
     if value is None: return None
     return 1.0 if value else 0.0
@@ -117,48 +194,25 @@ def scoreOperationalExcellence(ops: dict) -> tuple[float, list]:
 
 
 def scorePerformanceEfficiency(prf: dict) -> tuple[float, list]:
+    # rds_performance_insights_ratio: treat as N/A when no RDS has PI enabled
+    # (ratio=0.0 means "not used", not "failing" — don't penalise the whole pillar)
+    pi_raw = prf.get("rds_performance_insights_ratio")
+    pi_score = ratio(pi_raw) if pi_raw else None
+
     signals = [
-        ("Auto Scaling groups in use",        na(prf.get("autoscaling_group_count"),        lambda v: flag(v > 0))),
-        ("CloudFront distributions deployed", na(prf.get("cloudfront_distribution_count"), lambda v: flag(v > 0))),
-        ("Graviton instances in use",         na(prf.get("graviton_instances_used"),         flag)),
+        ("Auto Scaling groups in use",        na(prf.get("autoscaling_group_count"),              lambda v: flag(v > 0))),
+        ("CloudFront distributions deployed", na(prf.get("cloudfront_distribution_count"),        lambda v: flag(v > 0))),
+        ("Graviton instances in use",         na(prf.get("graviton_instances_used"),               flag)),
+        ("RDS Performance Insights enabled",  pi_score),
     ]
     return avg(signals), signals
 
-
-# Score calibration curve — maps raw weighted average (0.0–1.0) to credit score (300–850).
-#
-# A plain linear formula (300 + pct * 550) doesn't reflect how credit scores are actually
-# distributed. Real FICO data (2024) shows:
-#
-#   Tier          Score range   % of population
-#   Exceptional   800 – 850         ~21 %
-#   Very Good     740 – 799         ~28 %
-#   Good          670 – 739         ~22 %
-#   Fair          580 – 669         ~17 %
-#   Poor          300 – 579         ~12 %
-#
-# Cloud security posture follows a similar distribution — most accounts have some
-# baseline controls but meaningful gaps, and truly hardened accounts are rare.
-# The curve below places tier boundaries at realistic raw-score thresholds and
-# compresses the Exceptional range so it takes 93 %+ to reach 800.
-#
-#   Raw average   Credit score   Tier boundary
-#   0.00          300            —
-#   0.50          580            Poor → Fair
-#   0.65          670            Fair → Good
-#   0.80          740            Good → Very Good
-#   0.93          800            Very Good → Exceptional  ← hard to reach
-#   1.00          850            perfect
-#
-# Compare to the linear formula: Exceptional would start at 90.9 % raw.
-# Moving that to 93 % makes the top tier meaningfully harder.
-
 SCORE_CURVE = [
     (0.00, 300),
-    (0.50, 580),
-    (0.65, 670),
-    (0.80, 740),
-    (0.93, 800),
+    (0.47, 580),
+    (0.61, 670),
+    (0.75, 740),
+    (0.87, 800),
     (1.00, 850),
 ]
 
@@ -180,7 +234,7 @@ HELPING_THRESHOLD = 0.8
 
 def extractFactors(pillarResults: list[tuple[str, list]]) -> dict:
     allSignals = [
-        {"pillar": pillar, "check": name, "score": round(value, 2)}
+        {"rating": pillar, "check": name, "score": round(value, 2)}
         for pillar, signals in pillarResults
         for name, value in signals
         if value is not None
@@ -197,14 +251,19 @@ def extractFactors(pillarResults: list[tuple[str, list]]) -> dict:
     return {"helping": helping, "hurting": hurting}
 
 
-class CloudCreditEngine:
+class StatlerEngine:
     # Weights: Security 35%, Reliability 25%, Ops 25%, Performance 15%
 
-    def evaluate(self, evidence: dict) -> dict:
-        secScore, secSigs = scoreSecurity(evidence["security"])
-        relScore, relSigs = scoreReliability(evidence["reliability"])
-        opsScore, opsSigs = scoreOperationalExcellence(evidence["operational_excellence"])
-        prfScore, prfSigs = scorePerformanceEfficiency(evidence["performance_efficiency"])
+    def evaluate(self, evidence, services_in_use=None):
+        sec = _applyServiceFilter(evidence["security, privacy, and compliance"], "security, privacy, and compliance", services_in_use)
+        rel = _applyServiceFilter(evidence["reliability"],            "reliability",            services_in_use)
+        ops = _applyServiceFilter(evidence["operational_excellence"], "operational_excellence", services_in_use)
+        prf = _applyServiceFilter(evidence["performance_efficiency"], "performance_efficiency", services_in_use)
+
+        secScore, secSigs = scoreSecurity(sec)
+        relScore, relSigs = scoreReliability(rel)
+        opsScore, opsSigs = scoreOperationalExcellence(ops)
+        prfScore, prfSigs = scorePerformanceEfficiency(prf)
 
         weighted = [
             (secScore, 0.35),
@@ -222,13 +281,13 @@ class CloudCreditEngine:
         return {
             "score": rawToScore(finalPct),
             "pillars": {
-                "Security":               pct(secScore),
+                "Security, Privacy, and Compliance":               pct(secScore),
                 "Reliability":            pct(relScore),
                 "Operational Excellence": pct(opsScore),
                 "Performance Efficiency": pct(prfScore),
             },
             "factors": extractFactors([
-                ("Security",               secSigs),
+                ("Security, Privacy, and Compliance",               secSigs),
                 ("Reliability",            relSigs),
                 ("Operational Excellence", opsSigs),
                 ("Performance Efficiency", prfSigs),

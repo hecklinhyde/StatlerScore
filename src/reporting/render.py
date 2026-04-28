@@ -1,4 +1,4 @@
-BAR_WIDTH = 20  # characters wide; each char = 5%
+BAR_WIDTH = 20
 
 
 def bar(pct):
@@ -14,11 +14,11 @@ def pillarLabel(pct):
 
 
 def overallLabel(score):
-    if score >= 800: return "Exceptional"
-    if score >= 740: return "Very Good"
-    if score >= 670: return "Good"
-    if score >= 580: return "Fair"
-    return "Poor"
+    if score >= 800: return "Resilient Posture"
+    if score >= 740: return "Strong Posture"
+    if score >= 670: return "Stable Posture"
+    if score >= 580: return "Accumulating Technical Risk"
+    return "Critical Remediation Required"
 
 
 def generateReport(result, previousScore):
@@ -28,7 +28,7 @@ def generateReport(result, previousScore):
     trend   = "↑" if diff > 0 else "↓" if diff < 0 else "→"
     label   = overallLabel(score)
 
-    header = f"  Cloud Credit Score: {score}  {trend} ({diff:+d})  |  {label}"
+    header = f"  Statler Score: {score}  {trend} ({diff:+d})  |  {label}"
     width  = max(60, len(header) + 2)
     rule   = "=" * width
 
@@ -36,8 +36,8 @@ def generateReport(result, previousScore):
         rule,
         header,
         rule,
-        "  PILLAR BREAKDOWN",
-        f"  {'Pillar':<22}  {'Score':>5}   {'':^{BAR_WIDTH + 2}}  Status",
+        "  STATLER RATINGS",
+        f"  {'Rating':<22}  {'Score':>5}   {'':^{BAR_WIDTH + 2}}  Status",
         "  " + "-" * (width - 2),
     ]
 
@@ -60,23 +60,23 @@ def generateReport(result, previousScore):
         if hurting:
             lines.append("  Hurting your score (worst first):")
             for f in hurting:
-                lines.append(f"    - [{f['pillar']}] {f['check']:<40}  {f['score']:.0%}")
+                lines.append(f"    - [{f.get('rating', f.get('pillar', ''))}] {f['check']:<40}  {f['score']:.0%}")
         if helping:
             lines.append("  Helping your score (best first):")
             for f in helping:
-                lines.append(f"    + [{f['pillar']}] {f['check']:<40}  {f['score']:.0%}")
+                lines.append(f"    + [{f.get('rating', f.get('pillar', ''))}] {f['check']:<40}  {f['score']:.0%}")
 
     # Bureau attestation block — only shown when result comes from the API
     if "attestation_id" in result:
         lines += [
             rule,
-            "  BUREAU ATTESTATION",
+            "  STATLER ATTESTATION",
             "  " + "-" * (width - 2),
             f"  ID        {result['attestation_id']}",
             f"  Timestamp {result['timestamp']}",
             f"  Agent     {result['agent_hash'][:32]}...",
             f"  Sig       {result['signature'][:32]}...",
-            f"  Verdict   {result['verdict']}",
+            f"  Verdict   {overallLabel(score)}",
         ]
 
     lines.append(rule)
